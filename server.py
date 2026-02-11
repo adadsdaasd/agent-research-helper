@@ -24,6 +24,9 @@ from utils import (
     get_paper_citations,
     batch_fetch_repos,
     calculate_potential_score,
+    discover_and_evaluate,
+    calculate_heuristic_score,
+    SMART_MODE,
     DEFAULT_FILTER_EXT,
 )
 
@@ -750,6 +753,151 @@ async def get_project_intelligence(repo_url: str) -> str:
         return f"错误: {e}"
     except Exception as e:
         logger.exception(f"未知错误: {e}")
+        return f"错误: 处理请求时发生未知错误 - {str(e)}"
+
+
+@mcp.tool()
+async def autonomous_discover(topic: str, max_repos: int = 15) -> str:
+    """
+    自主发现特定领域的 Agent 项目
+
+    该工具会根据用户输入的研究主题，自动：
+    1. 生成多语言搜索关键词（智能模式使用 LLM）
+    2. 并行搜索 GitHub
+    3. 去重并评估每个仓库
+    4. 按质量评分排序返回
+
+    Args:
+        topic: 研究主题（如：音频、数字人、图像生成、LLM Agent）
+        max_repos: 最大返回数量（默认 15，最大 30）
+
+    Returns:
+        Markdown 格式的智能评估报告
+
+    Examples:
+        >>> await autonomous_discover("音频 Agent", max_repos=10)
+        >>> await autonomous_discover("数字人", max_repos=15)
+    """
+    logger.info(f"自主发现: topic='{topic}', max_repos={max_repos}")
+
+    # 限制 max_repos
+    max_repos = min(max(1, max_repos), 30)
+
+    try:
+        # Step 1-5: 发现与评估（在 utils.discover_and_evaluate 中完成）
+        repos = await discover_and_evaluate(topic, max_repos)
+
+        if not repos:
+            return f"""
+## 自主发现结果: {topic}
+
+未找到相关项目，可能原因：
+1. 主题过于冷门
+2. GitHub 搜索限制（配置 GITHUB_TOKEN 可提高限制）
+3. 智能模式未启用（配置 OPENAI_API_KEY 可启用）
+
+建议：
+- 尝试更宽泛的搜索词
+- 检查主题拼写
+- 或使用 basic_search 进行简单搜索
+"""
+
+        # 构建 Markdown 报告
+        mode_note = "智能模式 (LLM 语义分析)" if SMART_MODE else "基础模式 (启发式评分)"
+
+        # 构建表格
+        table_rows = []
+        for i, repo in enumerate(repos, 1):
+            name = repo.get("full_name", "")
+            score = repo.get("analysis_score", 0)
+            summary = repo.get("analysis_summary", "")[:60]
+            stars = repo.get("stargazers_count", 0)
+            url = repo.get("html_url", "")
+
+            # 评分颜色标记
+            if score >= 80:
+                score_emoji = "🟢"
+            elif score >= 60:
+                score_emoji = "🟡"
+            elif score >= 40:
+                score_emoji = "🟠"
+            else:
+                score_emoji = "🔴"
+
+            table_rows.append(
+                f"| {i} | [{name}]({url}) | {score_emoji} {score} | {summary} | {stars:,} |"
+            )
+
+        table_header = "| 排名 | 仓库 | 评分 | 摘要 | Stars |\n"
+        table_separator = "|------|------|------|------|-------|\n"
+
+        # 关键词信息
+        keywords = repos[0].get("search_keywords", []) if repos else []
+        keywords_str = ", ".join(keywords[:5]) if keywords else topic
+
+        report = f"""
+# 自主发现报告: {topic}
+
+**运行模式**: {mode_note}
+**搜索关键词**: {keywords_str}
+**发现数量**: {len(repos)} 个项目
+
+---
+
+## 评分说明
+
+| 评分范围 | 含义 |
+|---------|------|
+| 🟢 80-100 | 强烈推荐 - 高质量 Agent 项目 |
+| 🟡 60-79 | 推荐 - 较好的相关项目 |
+| 🟠 40-59 | 一般 - 可能相关 |
+| 🔴 0-39 | 不推荐 - 可能不相关 |
+
+---
+
+## 发现结果
+
+{table_header}{table_separator}{''.join(table_rows)}
+
+---
+
+## 详细信息
+
+"""
+
+        # 添加每个仓库的详细信息
+        for i, repo in enumerate(repos[:5], 1):  # 只显示前5个的详细信息
+            name = repo.get("full_name", "")
+            score = repo.get("analysis_score", 0)
+            summary = repo.get("analysis_summary", "")
+            desc = repo.get("description", "") or "无描述"
+            stars = repo.get("stargazers_count", 0)
+            forks = repo.get("forks_count", 0)
+            lang = repo.get("language", "") or "Unknown"
+            url = repo.get("html_url", "")
+
+            report += f"""
+### {i}. {name}
+
+- **评分**: {score}/100 | **Stars**: {stars:,} | **Forks**: {forks:,} | **语言**: {lang}
+- **摘要**: {summary}
+- **描述**: {desc}
+- **链接**: [GitHub]({url})
+"""
+
+        report += f"""
+---
+*报告生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*
+
+**提示**:
+- 配置 `OPENAI_API_KEY` 环境变量可启用智能模式，获得更准确的评分
+- 配置 `GITHUB_TOKEN` 可提高 GitHub API 速率限制
+"""
+
+        return report
+
+    except Exception as e:
+        logger.exception(f"自主发现失败: {e}")
         return f"错误: 处理请求时发生未知错误 - {str(e)}"
 
 

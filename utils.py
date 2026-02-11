@@ -1,6 +1,7 @@
 """
 GitHub API 辅助函数模块
 处理所有与 GitHub API 的通信
+包含：基础模式 + 智能模式（双重模式）
 """
 
 import os
@@ -18,12 +19,50 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# GitHub API 配置
+# ============== 配置 ==============
 GITHUB_API_BASE = "https://api.github.com"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-
-# Semantic Scholar API 配置
 SEMANTIC_SCHOLAR_API_BASE = "https://api.semanticscholar.org/graph/v1"
+
+# LLM API 配置（支持 OpenAI、DeepSeek、MiniMax、Claude 等）
+# 优先级：MINIMAX_API_KEY > OPENAI_API_KEY > ANTHROPIC_API_KEY
+MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY") or os.getenv("MINIMAX_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+# API 类型检测与配置
+API_TYPE = "unknown"
+API_BASE_URL = "https://api.openai.com/v1"
+API_MODEL = "gpt-3.5-turbo"
+
+if MINIMAX_API_KEY:
+    API_TYPE = "minimax"
+    API_BASE_URL = os.getenv("MINIMAX_BASE_URL", "https://api.minimaxi.com/v1")
+    API_MODEL = os.getenv("MINIMAX_MODEL", "MiniMax-Text-01")
+    OPENAI_API_KEY = MINIMAX_API_KEY
+    logger.info(f"智能模式 (MiniMax): {API_MODEL} @ {API_BASE_URL}")
+elif os.getenv("DEEPSEEK_API_KEY"):
+    API_TYPE = "deepseek"
+    API_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    API_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    OPENAI_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+    logger.info(f"智能模式 (DeepSeek): {API_MODEL} @ {API_BASE_URL}")
+elif OPENAI_API_KEY:
+    API_TYPE = "openai"
+    API_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    API_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+    logger.info(f"智能模式 (OpenAI): {API_MODEL} @ {API_BASE_URL}")
+elif ANTHROPIC_API_KEY:
+    API_TYPE = "anthropic"
+    API_BASE_URL = "https://api.anthropic.com"
+    API_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    logger.info(f"智能模式 (Claude): {API_MODEL} @ {API_BASE_URL}")
+else:
+    API_TYPE = "none"
+    logger.info("基础模式：无 LLM API Key，使用启发式评分算法")
+
+# 智能模式开关
+SMART_MODE = API_TYPE != "none"
 
 # 需要过滤的目录和文件
 IGNORED_DIRS = {".git", "node_modules", "__pycache__", ".idea", ".vscode", "venv", ".venv"}
@@ -219,6 +258,255 @@ def calculate_potential_score(stars: int, created_at: str) -> float:
         return 0.0
 
 
+# ============== 基础模式：启发式评分算法 ==============
+def calculate_heuristic_score(repo: dict) -> float:
+    """
+    基础模式核心评分算法
+
+    公式：
+    - Base Score = log(stars + 1) * 0.7 + log(forks + 1) * 0.3
+    - Time Factor = 1 / (1 + days_since_last_commit * 0.002)
+    - Final Score = Base Score * Time Factor (归一化为 0-100)
+
+    Args:
+        repo: 仓库信息字典
+
+    Returns:
+        评分 (0-100)
+    """
+    stars = repo.get("stargazers_count", 0)
+    forks = repo.get("forks_count", 0)
+
+    # Base Score: 使用 log 避免极端值影响
+    import math
+    base_score = math.log(stars + 1) * 0.7 + math.log(forks + 1) * 0.3
+
+    # Time Factor: 新近度衰减
+    updated_at = repo.get("updated_at", "")
+    if updated_at:
+        try:
+            updated_date = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+            now = datetime.now(updated_date.tzinfo)
+            days_since_update = (now - updated_date).days
+        except (ValueError, TypeError):
+            days_since_update = 365  # 默认一年
+    else:
+        days_since_update = 365
+
+    time_factor = 1 / (1 + days_since_update * 0.002)
+
+    # Final Score (归一化到 0-100)
+    final_score = base_score * time_factor * 10  # 乘以系数使分数更直观
+
+    return round(min(100, final_score), 2)
+
+
+# ============== 智能模式：LLM 调用 ==============
+async def call_llm(prompt: str, system_prompt: str = None) -> str:
+    """
+    调用 LLM（支持 OpenAI、DeepSeek、MiniMax、Claude 等）
+
+    Args:
+        prompt: 用户提示词
+        system_prompt: 系统提示词
+
+    Returns:
+        LLM 响应文本
+    """
+    # 懒加载 openai 库
+    try:
+        from openai import OpenAI
+    except ImportError:
+        logger.warning("openai 库未安装，无法使用智能模式")
+        return ""
+
+    # MiniMax Anthropic 兼容格式
+    extra_headers = {}
+    if API_TYPE == "minimax":
+        extra_headers["x-minimax-api-type"] = "anthropic"
+
+    # 创建客户端
+    client = OpenAI(
+        api_key=OPENAI_API_KEY,
+        base_url=API_BASE_URL,
+        default_headers=extra_headers if extra_headers else None,
+    )
+
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    try:
+        response = client.chat.completions.create(
+            model=API_MODEL,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500,
+        )
+
+        # 解析响应
+        if hasattr(response.choices[0].message, 'content'):
+            return response.choices[0].message.content.strip()
+        elif hasattr(response.choices[0].message, 'text'):
+            return response.choices[0].message.text.strip()
+
+    except Exception as e:
+        logger.error(f"LLM ({API_TYPE}) 调用失败: {e}")
+        return ""
+
+
+async def generate_keywords_smart(topic: str) -> list[str]:
+    """
+    生成搜索关键词
+
+    - Smart Mode: 调用 LLM 生成多个相关英文搜索词
+    - Basic Mode: 返回 [topic]
+
+    Args:
+        topic: 用户输入的主题
+
+    Returns:
+        关键词列表
+    """
+    if SMART_MODE:
+        logger.info(f"智能模式：生成关键词 for '{topic}'")
+
+        system_prompt = """你是一个 GitHub 搜索专家。
+用户会给你一个研究主题，你需要生成多个相关的英文搜索关键词。
+这些关键词应该能帮助找到该领域的优秀开源项目。
+
+要求：
+1. 生成 8-12 个关键词
+2. 返回纯 JSON 数组格式，例如：["keyword1", "keyword2"]
+3. 不要包含任何解释或 markdown 格式
+4. 关键词应该涵盖不同角度（技术名、应用场景、相关术语、具体项目名）
+5. 可以包含具体知名项目名（如 whisper, bark, TTS 等）
+6. 关键词应该足够具体，能搜到高质量项目"""
+
+        user_prompt = f"研究主题: {topic}\n\n请生成 10 个搜索关键词："
+
+        result = await call_llm(user_prompt, system_prompt)
+
+        # 解析 JSON
+        import json
+        try:
+            # 清理可能的 markdown 格式
+            result = result.strip()
+            if result.startswith("```"):
+                # 提取代码块内容
+                lines = result.split("\n")
+                result = "\n".join(line for line in lines if not line.startswith("```"))
+            keywords = json.loads(result)
+            if isinstance(keywords, list):
+                return keywords[:12]  # 返回最多12个关键词
+        except json.JSONDecodeError as e:
+            logger.warning(f"解析关键词失败: {e}, 使用基础关键词")
+
+        return [topic.lower()]
+    else:
+        # 基础模式：直接使用输入的主题
+        logger.info(f"基础模式：使用主题 '{topic}' 作为唯一关键词")
+        return [topic.lower()]
+
+
+async def fetch_readme(owner: str, repo: str) -> str:
+    """
+    获取仓库 README 内容（前 2000 字符）
+
+    Args:
+        owner: 仓库所有者
+        repo: 仓库名
+
+    Returns:
+        README 文本（截断）
+    """
+    try:
+        readme = await fetch_github(f"repos/{owner}/{repo}/readme")
+        import base64
+        content = base64.b64decode(readme.get("content", "")).decode("utf-8", errors="ignore")
+        return content[:2000]  # 截断避免 Token 溢出
+    except Exception as e:
+        logger.warning(f"获取 README 失败: {owner}/{repo}")
+        return ""
+
+
+async def analyze_repo_quality(repo: dict, readme_content: str = "") -> dict:
+    """
+    分析仓库质量
+
+    - Smart Mode: 调用 LLM 阅读 README，判断是否符合 Agent 定义并打分
+    - Basic Mode: 使用启发式评分算法
+
+    Args:
+        repo: 仓库信息
+        readme_content: README 内容（可选）
+
+    Returns:
+        {"score": float, "summary": str, "is_agent": bool}
+    """
+    owner = repo.get("owner", {}).get("login", "")
+    repo_name = repo.get("name", "")
+    description = repo.get("description", "") or ""
+
+    if SMART_MODE and readme_content:
+        logger.info(f"智能模式：分析仓库 {owner}/{repo_name}")
+
+        system_prompt = """你是一个技术评估专家。
+请评估以下 GitHub 项目是否属于"Agent/AI 智能体"类别，并打分 0-100。
+
+Agent/AI 智能体的特征：
+- 能够自主决策或执行任务
+- 包含 AI/ML 模型或算法
+- 支持与外部系统交互
+- 具有对话/推理/规划能力
+
+输出格式（JSON）：
+{"score": 85, "summary": "一句话概括核心功能", "is_agent": true}
+
+要求：
+- score: 0-100 的数字
+- summary: 一句话概括（中文）
+- is_agent: true/false"""
+
+        user_prompt = f"""
+项目名称: {owner}/{repo_name}
+描述: {description}
+README 摘要: {readme_content[:1500]}
+
+请评估：
+"""
+
+        result = await call_llm(user_prompt, system_prompt)
+
+        # 解析 JSON
+        import json
+        try:
+            result = result.strip()
+            if result.startswith("```"):
+                lines = result.split("\n")
+                result = "\n".join(line for line in lines if not line.startswith("```"))
+            analysis = json.loads(result)
+            return {
+                "score": float(analysis.get("score", 50)),
+                "summary": analysis.get("summary", description[:50]),
+                "is_agent": analysis.get("is_agent", False),
+            }
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"解析 LLM 结果失败: {e}")
+            # 回退到基础模式
+    else:
+        logger.info(f"基础模式：启发式评分 {owner}/{repo_name}")
+
+    # 基础模式：使用启发式算法
+    score = calculate_heuristic_score(repo)
+    return {
+        "score": score,
+        "summary": "基于使用统计（Stars、Forks、活跃度）",
+        "is_agent": True,  # 基础模式假设相关
+    }
+
+
 async def search_github_repos(
     query: str,
     language: str = "Python",
@@ -230,7 +518,7 @@ async def search_github_repos(
 
     Args:
         query: 搜索关键词
-        language: 编程语言筛选
+        language: 编程语言筛选 (使用 "any" 表示不限语言)
         sort: 排序方式 (stars, updated, forks)
         per_page: 返回结果数量
 
@@ -243,7 +531,11 @@ async def search_github_repos(
     logger.info(f"搜索 GitHub 仓库: query={query}, language={language}, sort={sort}")
 
     # 构建查询参数
-    search_query = f"{query}+language:{language}"
+    if language and language.lower() != "any":
+        search_query = f"{query}+language:{language}"
+    else:
+        search_query = query  # 不加 language 限制
+
     params = {"q": search_query, "sort": sort, "per_page": per_page}
 
     async with httpx.AsyncClient() as client:
@@ -537,3 +829,120 @@ def search_in_file(content: str, keywords: list, context_lines: int = 10) -> str
             result_parts.append(f"\n... [后文省略 {total_lines - end} 行] ...\n")
 
     return '\n'.join(result_parts)
+
+
+# ============== 自主发现核心函数 ==============
+async def discover_and_evaluate(topic: str, max_repos: int = 15) -> list[dict]:
+    """
+    自主发现并评估特定领域的 Agent 项目
+
+    工作流程：
+    1. 调用 DeepSeek 生成多个搜索关键词
+    2. 同时搜索 topic 本身（更宽泛）
+    3. 添加热门项目名作为补充关键词
+    4. 去重、数据丰富化、按评分排序
+
+    Args:
+        topic: 研究主题（如：音频 Agent、数字人）
+        max_repos: 最大返回数量
+
+    Returns:
+        排序后的仓库列表（包含评分和摘要）
+    """
+    logger.info(f"开始自主发现: topic='{topic}', max_repos={max_repos}")
+
+    # Step 1: 调用 DeepSeek 生成关键词
+    keywords = await generate_keywords_smart(topic)
+    logger.info(f"生成关键词: {keywords}")
+
+    # Step 1b: 同时搜索 topic 本身（更宽泛，不加过滤词）
+    topic_keywords = topic.split()
+    logger.info(f"使用 topic 本身作为补充搜索词: {topic_keywords}")
+
+    # Step 1c: 音频领域热门项目名（确保包含顶级项目）
+    audio_hot_projects = ["whisper", "TTS", "audiocraft", "Coqui TTS", "bark",
+                          "LocalAI", "funNLP", "NeMo", "Vosk", "DeepSpeech",
+                          "GPT-SoVITS", "ChatTTS", "so-vits-svc", "OpenVoice",
+                          "MusicGen", "CosyVoice"]
+
+    # 合并所有关键词
+    all_keywords = list(set(keywords + topic_keywords + audio_hot_projects))
+    logger.info(f"合并后总计 {len(all_keywords)} 个搜索词")
+
+    # Step 2: 并行搜索 GitHub
+    all_repos = []
+    seen_urls = set()
+
+    for keyword in all_keywords:
+        try:
+            # 搜索时不限制语言，获取更多结果
+            repos = await search_github_repos(keyword, language="any", sort="stars", per_page=10)
+
+            for repo in repos:
+                url = repo.get("html_url", "")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    all_repos.append(repo)
+
+            logger.info(f"关键词 '{keyword}': 找到 {len(repos)} 个")
+        except Exception as e:
+            logger.warning(f"搜索 '{keyword}' 失败: {e}")
+
+    logger.info(f"去重后总计: {len(all_repos)} 个仓库")
+
+    # 如果搜索结果太少，尝试搜索关键词本身（不作为过滤条件）
+    if len(all_repos) < 5:
+        logger.info("搜索结果较少，尝试备用搜索...")
+        basic_keywords = topic.split()
+        for kw in basic_keywords[:5]:
+            if kw.lower() not in [k.lower() for k in keywords]:
+                try:
+                    repos = await search_github_repos(kw, language="any", sort="stars", per_page=10)
+                    for repo in repos:
+                        url = repo.get("html_url", "")
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
+                            all_repos.append(repo)
+                    logger.info(f"备用关键词 '{kw}': 找到 {len(repos)} 个")
+                except:
+                    pass
+
+    # Step 3 & 4: 数据丰富化（并行）
+    semaphore = asyncio.Semaphore(3)  # 限制并发
+
+    async def enrich_repo(repo: dict) -> dict:
+        async with semaphore:
+            owner = repo.get("owner", {}).get("login", "")
+            name = repo.get("name", "")
+
+            # 获取 README（仅智能模式需要）
+            readme_content = ""
+            if SMART_MODE:
+                readme_content = await fetch_readme(owner, name)
+
+            # 质量分析
+            analysis = await analyze_repo_quality(repo, readme_content)
+
+            return {
+                **repo,
+                "analysis_score": analysis["score"],
+                "analysis_summary": analysis["summary"],
+                "is_agent": analysis["is_agent"],
+                "search_keywords": keywords,
+            }
+
+    # 并行处理所有仓库
+    enriched_tasks = [enrich_repo(repo) for repo in all_repos]
+    enriched_repos = await asyncio.gather(*enriched_tasks, return_exceptions=True)
+
+    # 过滤异常结果
+    valid_repos = [
+        r for r in enriched_repos
+        if isinstance(r, dict) and r.get("analysis_score", 0) > 0
+    ]
+
+    # Step 5: 按评分排序
+    valid_repos.sort(key=lambda x: x.get("analysis_score", 0), reverse=True)
+
+    logger.info(f"完成分析，返回前 {min(len(valid_repos), max_repos)} 个")
+    return valid_repos[:max_repos]
