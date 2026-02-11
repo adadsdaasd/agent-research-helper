@@ -1,16 +1,186 @@
 # GitHub Scout MCP Server
 
-帮助 LLM 快速调研和分析 GitHub 仓库结构与质量的 MCP Server。
+一个智能 GitHub 仓库发现与评估工具，支持自主搜索和智能分析。
 
-## 功能概览
+## 功能特性
 
-GitHub Scout 提供三个核心工具，让 AI 能够快速了解任意 GitHub 仓库的状态和结构：
+### 核心功能
 
-| 工具 | 功能 | 返回值 |
-|------|------|--------|
-| `get_repo_health` | 评估项目活跃度，获取关键指标 | Stars、Forks、Issues、最后提交时间 |
-| `analyze_repo_structure` | 获取项目目录树结构 | ASCII 树状图 |
-| `fetch_critical_logic` | 读取指定文件的核心代码 | 原始代码内容（自动截断大文件） |
+| 功能 | 说明 |
+|------|------|
+| 🔍 **自主搜索** | 无需手动维护列表，AI 自动生成搜索关键词发现相关项目 |
+| 📊 **智能评估** | 基于 Stars、Forks、活跃度多维度评分 |
+| 🌍 **跨语言** | 支持中英文搜索，不限编程语言 |
+| ⚡ **双重模式** | 智能模式（LLM API）/ 基础模式（免费无需配置） |
+
+### 支持的 LLM
+
+- **DeepSeek** (推荐)
+- **OpenAI**
+- **MiniMax**
+- **Claude**
+
+## 快速开始
+
+### 1. 安装依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. 配置环境变量
+
+复制 `.env.example` 为 `.env`：
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env` 文件：
+
+```env
+# GitHub Token (用于搜索 API)
+GITHUB_TOKEN=ghp_xxx
+
+# DeepSeek API Key (用于智能关键词生成)
+DEEPSEEK_API_KEY=sk-xxx
+```
+
+### 3. 运行 MCP Server
+
+```bash
+python server.py
+```
+
+## MCP 工具
+
+### autonomous_discover
+
+自主发现特定领域的 Agent 项目：
+
+```python
+# MCP 工具调用
+autonomous_discover(topic="音频 Agent", max_repos=15)
+```
+
+**参数：**
+- `topic`: 研究主题（如：音频、数字人、图像生成）
+- `max_repos`: 最大返回数量（默认 15）
+
+**返回：**
+- Markdown 格式的智能评估报告
+- 包含仓库排名、Stars、评分、活跃度
+
+### search_github_repos
+
+搜索 GitHub 仓库：
+
+```python
+search_github_repos(
+    query="audio agent",
+    language="any",  # 不限语言
+    sort="stars",    # 按 Stars 排序
+    per_page=10       # 每页数量
+)
+```
+
+### batch_analyze_repos
+
+批量分析多个仓库：
+
+```python
+batch_analyze_repos(
+    repo_urls=[
+        "https://github.com/openai/whisper",
+        "https://github.com/coqui-ai/TTS"
+    ]
+)
+```
+
+## 项目结构
+
+```
+my-mini-agent/
+├── server.py         # MCP Server 入口
+├── utils.py          # GitHub API + LLM 调用
+├── requirements.txt  # 依赖列表
+├── .env.example      # 配置示例
+├── .env              # 环境变量（不提交）
+└── README.md        # 本文档
+```
+
+## 配置文件说明
+
+### .env 配置项
+
+| 变量 | 必需 | 说明 |
+|------|------|------|
+| `GITHUB_TOKEN` | 可选 | GitHub Personal Access Token，增加 API 速率限制 |
+| `DEEPSEEK_API_KEY` | 可选 | DeepSeek API Key，启用智能搜索模式 |
+| `OPENAI_API_KEY` | 可选 | OpenAI API Key |
+| `ANTHROPIC_API_KEY` | 可选 | Claude API Key |
+
+### GitHub Token 申请
+
+1. 访问 https://github.com/settings/tokens
+2. 点击 "Generate new token (classic)"
+3. 设置名称，勾选 `repo` 权限
+4. 生成 Token 并添加到 `.env`
+
+## 评分算法
+
+### 综合评分公式
+
+```
+综合评分 = Base Score × Time Factor × 10
+```
+
+- **Base Score**: `log(stars+1) × 0.7 + log(forks+1) × 0.3`
+- **Time Factor**: `1 / (1 + days_since_update × 0.002)`
+- **评分范围**: 0-100
+
+### 潜力评分
+
+```
+潜力评分 = Stars / 创建天数
+```
+
+## 使用示例
+
+### 搜索音频类项目
+
+```python
+# 搜索音频相关的 Agent 项目
+await autonomous_discover("音频 Agent", max_repos=10)
+```
+
+### 搜索数字人类项目
+
+```python
+# 搜索数字人/虚拟人相关项目
+await autonomous_discover("数字人", max_repos=15)
+```
+
+### 搜索图像生成类项目
+
+```python
+# 搜索图像生成相关项目
+await autonomous_discover("图像生成", max_repos=10)
+```
+
+## 搜索结果示例
+
+```
+# GitHub Scout - 音频 Agent 精选报告
+
+| 排名 | 仓库 | Stars | 综合评分 |
+|------|------|-------|----------|
+| 1 | openai/whisper | 94,460 | 100.0 |
+| 2 | coqui-ai/TTS | 44,516 | 99.2 |
+| 3 | suno-ai/bark | 38,971 | 95.0 |
+| 4 | RVC-Boss/GPT-SoVITS | 54,916 | 98.0 |
+| 5 | 2noise/ChatTTS | 38,696 | 94.0 |
+```
 
 ## 技术栈
 
@@ -19,116 +189,21 @@ GitHub Scout 提供三个核心工具，让 AI 能够快速了解任意 GitHub �
 - **HTTP 客户端**: `httpx` - 异步 HTTP 请求
 - **环境管理**: `python-dotenv`
 
-## 项目结构
-
-```
-my-mini-agent/
-├── server.py           # MCP Server 主入口，定义三个工具
-├── utils.py            # GitHub API 辅助函数
-├── requirements.txt    # Python 依赖列表
-├── .env               # GitHub Token 配置（可选）
-└── .gitignore         # Git 忽略规则
-```
-
-## 核心工具详解
-
-### 1. get_repo_health
-
-快速评估项目活跃度，决定是否值得深入调研。
-
-**输入参数：**
-- `repo_url`: GitHub 仓库 URL（支持多种格式）
-
-**返回示例：**
-```markdown
-## 仓库健康报告: anthropics/claude-code
-
-| 指标 | 数量 |
-|------|------|
-| Stars | 65,964 |
-| Forks | 5,069 |
-| Open Issues | 6,662 |
-| License | N/A |
-
-最后提交时间: 2026-02-10 23:10:48 UTC
-默认分支: main
-```
-
-### 2. analyze_repo_structure
-
-获取项目目录树结构，了解代码组织方式。
-
-**输入参数：**
-- `repo_url`: GitHub 仓库 URL
-- `max_depth`: 最大递归深度（默认 2）
-
-**返回示例：**
-```markdown
-## 仓库结构: anthropics/claude-code
-
-📁 claude-code/
-├── 📁 .claude
-│   └── 📁 commands
-│       ├── 📄 commit-push-pr.md
-│       └── 📄 dedupe.md
-├── 📁 plugins
-│   ├── 📁 agent-sdk-dev
-│   ├── 📁 code-review
-│   └── 📄 README.md
-├── 📄 README.md
-└── 📄 LICENSE.md
-
-（已自动过滤 .git, node_modules, __pycache__ 等）
-```
-
-**过滤规则：**
-- 目录: `.git`, `node_modules`, `__pycache__`, `.idea`, `.vscode`, `venv`
-- 文件扩展名: `.png`, `.jpg`, `.mp4`, `.pdf`, `.zip` 等
-
-### 3. fetch_critical_logic
-
-读取指定文件的核心代码，用于深入分析。
-
-**输入参数：**
-- `repo_url`: GitHub 仓库 URL
-- `file_paths`: 文件路径列表（相对于仓库根目录）
-
-**返回示例：**
-```markdown
-## 关键代码分析
-
-### 📄 src/main.py
-- **总行数**: 150
-- **大小**: 5200 bytes
-- **完整内容**:
-
-```python
-import os
-def main():
-    ...
-```
-
-### ❌ README.md
-错误: 资源未找到
-```
-
-**Token 节省策略：**
-- 文件 ≤ 500 行：返回完整内容
-- 文件 > 500 行：返回前 200 行 + 后 50 行
-
 ## 安装与配置
 
-### 1. 创建 Python 3.10+ 环境
+### 1. 创建 Python 环境
 
 ```bash
 # 使用 conda
 conda create -n github-scout python=3.10 -y
 conda activate github-scout
 
-# 或使用 uv
-uv venv --python 3.10
-source .venv/bin/activate  # Linux/Mac
-.venv\Scripts\activate     # Windows
+# 或使用 venv
+python -m venv venv
+# Windows
+venv\Scripts\activate
+# Linux/Mac
+source venv/bin/activate
 ```
 
 ### 2. 安装依赖
@@ -137,19 +212,14 @@ source .venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 ```
 
-### 3. 配置 GitHub Token（可选）
-
-编辑 `.env` 文件：
+### 3. 配置环境变量
 
 ```bash
-GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+cp .env.example .env
+# 编辑 .env 文件，填入你的 API Keys
 ```
 
-**作用：**
-- 匿名访问：60 次/小时
-- 认证访问：5,000 次/小时
-
-### 4. 运行 MCP Server
+### 4. 运行
 
 ```bash
 python server.py
@@ -170,80 +240,41 @@ python server.py
 }
 ```
 
-## 使用示例
-
-```python
-import asyncio
-from server import get_repo_health, analyze_repo_structure, fetch_critical_logic
-
-async def demo():
-    repo = "https://github.com/anthropics/claude-code"
-    
-    # 1. 检查项目活跃度
-    health = await get_repo_health(repo)
-    print(health)
-    
-    # 2. 查看目录结构
-    structure = await analyze_repo_structure(repo, max_depth=2)
-    print(structure)
-    
-    # 3. 读取关键文件
-    code = await fetch_critical_logic(repo, ["README.md", "package.json"])
-    print(code)
-
-asyncio.run(demo())
-```
-
-## 工作流程
-
-```
-用户请求
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  1. 解析仓库 URL                     │
-│     (支持多种格式自动识别)           │
-└─────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  2. 调用 GitHub REST API            │
-│     (并发请求优化性能)               │
-└─────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  3. 数据处理与格式化                 │
-│     - 过滤无关文件/目录              │
-│     - 大文件智能截断                 │
-│     - Markdown 表格输出              │
-└─────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  4. 返回结果给 LLM                  │
-└─────────────────────────────────────┘
-```
-
 ## API 接口
 
 GitHub Scout 内部调用的 API：
 
 | 端点 | 用途 |
 |------|------|
+| `GET /search/repositories` | 搜索仓库 |
 | `GET /repos/{owner}/{repo}` | 获取仓库元数据 |
 | `GET /repos/{owner}/{repo}/commits` | 获取最近提交 |
-| `GET /repos/{owner}/{repo}/contents/{path}` | 获取目录/文件列表 |
-| `Raw URL` | 下载文件原始内容 |
+| `GET /repos/{owner}/{repo}/readme` | 获取 README |
 
-## 错误处理
+## 常见问题
 
-| 错误类型 | 处理方式 |
-|----------|----------|
-| 404 Not Found | 返回"资源未找到"提示 |
-| 403 Rate Limit | 返回"API 速率限制"警告 |
-| 401 Auth Failed | 返回"认证失败"提示 |
-| 网络错误 | 返回"网络请求失败"提示 |
+### Q: 没有 API Key 能用吗？
+
+A: 可以！没有配置 LLM API Key 时，会使用基础模式，直接使用输入的关键词搜索。
+
+### Q: GitHub Token 是必须的吗？
+
+A: 不是必须，但不配置会有速率限制（10 次/分钟），配置后可提升到 60 次/分钟。
+
+### Q: 搜索结果太少怎么办？
+
+A: 检查 `.env` 中是否配置了 LLM API Key，智能模式会自动扩展搜索词。
+
+### Q: DeepSeek API Key 从哪里获取？
+
+A: 访问 https://platform.deepseek.com 注册并创建 API Key。
+
+## 参考项目
+
+- [openai/whisper](https://github.com/openai/whisper) - 语音识别
+- [coqui-ai/TTS](https://github.com/coqui-ai/TTS) - 文本转语音
+- [RVC-Boss/GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) - 语音合成
+- [suno-ai/bark](https://github.com/suno-ai/bark) - 文本转语音模型
 
 ## 贡献
 
